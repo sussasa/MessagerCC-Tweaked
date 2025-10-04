@@ -1,58 +1,46 @@
-rednet.open("back")
-
-local usersFile = "users.db"
 local users = {}
 local chats = {}
+local side = "back"
 
-local function loadUsers()
-    if fs.exists(usersFile) then
-        local f = fs.open(usersFile, "r")
-        users = textutils.unserialize(f.readAll()) or {}
-        f.close()
-    end
-end
+rednet.open(side)
 
-local function saveUsers()
-    local f = fs.open(usersFile, "w")
-    f.write(textutils.serialize(users))
-    f.close()
-end
-
-loadUsers()
+print("TESTCHAT SERVER started")
 
 while true do
     local id, msg = rednet.receive()
-    local data = textutils.unserialize(msg)
-    if data then
-        if data.type == "register" then
-            if users[data.user] then
-                rednet.send(id, textutils.serialize({ok=false, reason="user_exists"}))
+    if type(msg) == "table" then
+        if msg.type == "register" then
+            if users[msg.nick] then
+                rednet.send(id, {type="register", success=false, reason="Nickname already exists"})
             else
-                users[data.user] = {password=data.password}
-                saveUsers()
-                rednet.send(id, textutils.serialize({ok=true}))
+                users[msg.nick] = {password=msg.password}
+                rednet.send(id, {type="register", success=true})
             end
-        elseif data.type == "login" then
-            local u = users[data.user]
-            if u and u.password == data.password then
-                rednet.send(id, textutils.serialize({ok=true}))
+        elseif msg.type == "login" then
+            if users[msg.nick] and users[msg.nick].password == msg.password then
+                rednet.send(id, {type="login", success=true})
             else
-                rednet.send(id, textutils.serialize({ok=false}))
+                rednet.send(id, {type="login", success=false, reason="Wrong nick or password"})
             end
-        elseif data.type == "message" then
-            chats[data.chat] = chats[data.chat] or {}
-            table.insert(chats[data.chat], {user=data.user, text=data.text, time=data.time})
-            rednet.broadcast(textutils.serialize({
-                type="new_message",
-                chat=data.chat,
-                user=data.user,
-                text=data.text,
-                time=data.time
-            }))
-        elseif data.type == "whisper" then
-            for pid,_ in pairs(rednet.lookup("user", data.to) or {}) do
-                rednet.send(pid, textutils.serialize(data))
+        elseif msg.type == "create_chat" then
+            if chats[msg.chat] then
+                rednet.send(id, {type="create_chat", success=false, reason="Chat code already exists"})
+            else
+                chats[msg.chat] = {}
+                rednet.send(id, {type="create_chat", success=true})
+            end
+        elseif msg.type == "send_message" then
+            if chats[msg.chat] then
+                table.insert(chats[msg.chat], msg.nick..": "..msg.text)
+                rednet.broadcast({type="new_message", chat=msg.chat, text=msg.nick..": "..msg.text})
+            end
+        elseif msg.type == "history" then
+            if chats[msg.chat] then
+                rednet.send(id, {type="history", chat=msg.chat, messages=chats[msg.chat]})
+            else
+                rednet.send(id, {type="history", chat=msg.chat, messages={}})
             end
         end
     end
 end
+
