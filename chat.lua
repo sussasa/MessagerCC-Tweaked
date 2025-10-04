@@ -1,157 +1,145 @@
-rednet.open("back")
+local side = "back"
+rednet.open(side)
 
-local nickname, password
+local nick = nil
+local password = nil
+local currentChat = nil
 
-local function registerUser()
-    term.clear()
-    print("=== Регистрация ===")
-    write("Введите ник: ")
-    local user = read()
-    write("Введите пароль: ")
-    local pass = read("*")
-    rednet.broadcast(textutils.serialize({type="register", user=user, password=pass}))
-    local _, reply = rednet.receive(2)
-    if reply then
-        local res = textutils.unserialize(reply)
-        if res.ok then
-            print("Регистрация успешна!")
-            os.sleep(1)
-        else
-            print("Пользователь уже существует!")
-            os.sleep(1)
-        end
-    end
-end
-
-local function loginUser()
-    term.clear()
-    print("=== Вход ===")
-    write("Ник: ")
-    local user = read()
-    write("Пароль: ")
-    local pass = read("*")
-    rednet.broadcast(textutils.serialize({type="login", user=user, password=pass}))
-    local _, reply = rednet.receive(2)
-    if reply then
-        local res = textutils.unserialize(reply)
-        if res.ok then
-            nickname, password = user, pass
-            return true
-        else
-            print("Неверные данные!")
-            os.sleep(1)
-        end
-    end
-    return false
-end
-
-local function redraw(title, messages, scroll)
+function mainMenu()
     term.clear()
     term.setCursorPos(1,1)
-    print(title)
-    print("--------------------------")
-    local maxLines = 13
-    local startIndex = math.max(1, #messages - maxLines + 1 + scroll)
-    local endIndex = math.min(#messages, startIndex + maxLines - 1)
-    for i=startIndex, endIndex do
-        local msg = messages[i]
-        if msg.user == nickname then term.setTextColor(colors.green)
-        else term.setTextColor(colors.white) end
-        print("["..msg.time.."] "..msg.user..": "..msg.text)
-    end
-    term.setTextColor(colors.white)
-    term.setCursorPos(1, 17)
-    term.clearLine()
-    write("Введите сообщение: ")
+    print("Welcome to TESTCHAT")
+    print("1. Register")
+    print("2. Login")
+    print("3. Join chat")
+    print("4. Create chat")
+    print("5. Exit")
+    print("")
+    print("--- Commands Guide ---")
+    print("/exit   - go to main menu")
+    print("/w <nick> <message> - private message")
+    print("/switch <code> - switch chat")
+    print("/history - show full history")
+    print("-----------------------")
+    print("VERSION 1")
+    write("> ")
 end
 
-local function chatRoom(chatCode, isPrivate, targetUser)
-    local messages, scroll = {}, 0
-    redraw("Чат: "..chatCode, messages, scroll)
-    parallel.waitForAny(
-        function()
-            while true do
-                local _, msg = rednet.receive()
-                local data = textutils.unserialize(msg)
-                if data then
-                    if isPrivate and data.type=="whisper" and 
-                       ((data.to==nickname and data.from==targetUser) or (data.from==nickname and data.to==targetUser)) then
-                        table.insert(messages, {user=data.from, text=data.text, time=data.time})
-                        redraw("ЛС: "..targetUser, messages, scroll)
-                    elseif not isPrivate and data.type=="new_message" and data.chat==chatCode then
-                        table.insert(messages, {user=data.user, text=data.text, time=data.time})
-                        redraw("Чат: "..chatCode, messages, scroll)
+function register()
+    term.clear()
+    print("Register")
+    write("Enter nickname: ")
+    local n = read()
+    write("Enter password: ")
+    local p = read("*")
+    rednet.broadcast({type="register", nick=n, password=p})
+    local _, response = rednet.receive(2)
+    if response and response.type=="register" and response.success then
+        print("Registration successful!")
+    else
+        print("Registration failed: "..(response and response.reason or "No server"))
+    end
+    sleep(2)
+end
+
+function login()
+    term.clear()
+    print("Login")
+    write("Enter nickname: ")
+    local n = read()
+    write("Enter password: ")
+    local p = read("*")
+    rednet.broadcast({type="login", nick=n, password=p})
+    local _, response = rednet.receive(2)
+    if response and response.type=="login" and response.success then
+        nick = n
+        password = p
+        print("Login successful!")
+    else
+        print("Login failed: "..(response and response.reason or "No server"))
+    end
+    sleep(2)
+end
+
+function joinChat()
+    if not nick then
+        print("You must login first!")
+        sleep(2)
+        return
+    end
+    term.clear()
+    write("Enter chat code: ")
+    local c = read()
+    currentChat = c
+    chatLoop()
+end
+
+function createChat()
+    if not nick then
+        print("You must login first!")
+        sleep(2)
+        return
+    end
+    term.clear()
+    write("Enter new chat code: ")
+    local c = read()
+    rednet.broadcast({type="create_chat", chat=c})
+    local _, response = rednet.receive(2)
+    if response and response.type=="create_chat" and response.success then
+        print("Chat created!")
+        currentChat = c
+        sleep(1)
+        chatLoop()
+    else
+        print("Chat creation failed: "..(response and response.reason or "No server"))
+        sleep(2)
+    end
+end
+
+function chatLoop()
+    term.clear()
+    print("Your nickname: "..nick)
+    print("Chat code: "..currentChat)
+    print("-----------------------------")
+    while true do
+        parallel.waitForAny(
+            function()
+                local id, msg = rednet.receive()
+                if msg.type=="new_message" and msg.chat==currentChat then
+                    print(msg.text)
+                elseif msg.type=="history" and msg.chat==currentChat then
+                    print("Chat history:")
+                    for _,m in ipairs(msg.messages) do
+                        print(m)
                     end
                 end
-            end
-        end,
-        function()
-            while true do
-                term.setCursorPos(1,17)
-                term.clearLine()
-                write("Введите сообщение: ")
+            end,
+            function()
+                write("> ")
                 local text = read()
                 if text=="/exit" then return end
-                if isPrivate then
-                    rednet.broadcast(textutils.serialize({
-                        type="whisper",
-                        from=nickname,
-                        to=targetUser,
-                        text=text,
-                        time=textutils.formatTime(os.time(), true)
-                    }))
+                if text=="/history" then
+                    rednet.broadcast({type="history", chat=currentChat})
                 else
-                    rednet.broadcast(textutils.serialize({
-                        type="message",
-                        chat=chatCode,
-                        user=nickname,
-                        text=text,
-                        time=textutils.formatTime(os.time(), true)
-                    }))
+                    rednet.broadcast({type="send_message", chat=currentChat, nick=nick, text=text})
                 end
             end
-        end
-    )
-end
-
-local function mainMenu()
-    while true do
-        term.clear()
-        print("Добро пожаловать в TESTCHAT")
-        print()
-        print("1. Войти в чат")
-        print("2. Личные сообщения")
-        print("3. Создать чат")
-        print("4. Регистрация")
-        print("5. Выйти")
-        print()
-        print("Команды внутри чата:")
-        print("/exit - выйти в меню")
-        print()
-        write("Ваш выбор: ")
-        local choice = read()
-        if choice=="1" then
-            if not loginUser() then goto continue end
-            write("Введите код чата: ")
-            local chatCode = read()
-            chatRoom(chatCode, false)
-        elseif choice=="2" then
-            if not loginUser() then goto continue end
-            write("Введите ник собеседника: ")
-            local target = read()
-            chatRoom("ЛС_"..target, true, target)
-        elseif choice=="3" then
-            if not loginUser() then goto continue end
-            write("Введите код нового чата: ")
-            local newCode = read()
-            chatRoom(newCode, false)
-        elseif choice=="4" then
-            registerUser()
-        elseif choice=="5" then
-            return
-        end
-        ::continue::
+        )
     end
 end
 
-mainMenu()
+while true do
+    mainMenu()
+    local choice = read()
+    if choice=="1" then
+        register()
+    elseif choice=="2" then
+        login()
+    elseif choice=="3" then
+        joinChat()
+    elseif choice=="4" then
+        createChat()
+    elseif choice=="5" then
+        break
+    end
+end
