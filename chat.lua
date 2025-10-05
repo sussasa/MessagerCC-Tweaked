@@ -1,145 +1,131 @@
-local side = "back"
-rednet.open(side)
+local modem = peripheral.find("modem")
+if not modem then print("No modem found!") return end
+modem.open(1)
 
-local nick = nil
-local password = nil
-local currentChat = nil
+local nickname = ""
+local server_id = nil
+local chat_id = nil
+local messages = {}
 
-function mainMenu()
+local function clear()
     term.clear()
     term.setCursorPos(1,1)
+end
+
+local function waitKey()
+    os.pullEvent("key")
+end
+
+local function showMainMenu()
+    clear()
     print("Welcome to TESTCHAT")
-    print("1. Register")
-    print("2. Login")
-    print("3. Join chat")
-    print("4. Create chat")
-    print("5. Exit")
-    print("")
-    print("--- Commands Guide ---")
-    print("/exit   - go to main menu")
-    print("/w <nick> <message> - private message")
-    print("/switch <code> - switch chat")
-    print("/history - show full history")
-    print("-----------------------")
+    print("-------------------")
+    print("1. Register / Login")
+    print("2. Choose Server")
+    print("3. Join Chat")
+    print("4. Private Messages")
+    print("5. Create Chat")
+    print("6. Create Server")
+    print("7. Server List")
+    print("8. Exit")
+    print("-------------------")
+    if server_id then
+        print("Selected Server: " .. server_id)
+    else
+        print("Selected Server: none")
+    end
     print("VERSION 1")
-    write("> ")
 end
 
-function register()
-    term.clear()
-    print("Register")
-    write("Enter nickname: ")
-    local n = read()
-    write("Enter password: ")
-    local p = read("*")
-    rednet.broadcast({type="register", nick=n, password=p})
-    local _, response = rednet.receive(2)
-    if response and response.type=="register" and response.success then
-        print("Registration successful!")
-    else
-        print("Registration failed: "..(response and response.reason or "No server"))
-    end
-    sleep(2)
+local function registerLogin()
+    clear()
+    write("Enter your nickname: ")
+    nickname = read()
 end
 
-function login()
-    term.clear()
-    print("Login")
-    write("Enter nickname: ")
-    local n = read()
-    write("Enter password: ")
-    local p = read("*")
-    rednet.broadcast({type="login", nick=n, password=p})
-    local _, response = rednet.receive(2)
-    if response and response.type=="login" and response.success then
-        nick = n
-        password = p
-        print("Login successful!")
-    else
-        print("Login failed: "..(response and response.reason or "No server"))
-    end
-    sleep(2)
-end
-
-function joinChat()
-    if not nick then
-        print("You must login first!")
-        sleep(2)
-        return
-    end
-    term.clear()
-    write("Enter chat code: ")
-    local c = read()
-    currentChat = c
-    chatLoop()
-end
-
-function createChat()
-    if not nick then
-        print("You must login first!")
-        sleep(2)
-        return
-    end
-    term.clear()
-    write("Enter new chat code: ")
-    local c = read()
-    rednet.broadcast({type="create_chat", chat=c})
-    local _, response = rednet.receive(2)
-    if response and response.type=="create_chat" and response.success then
-        print("Chat created!")
-        currentChat = c
+local function chooseServer()
+    clear()
+    print("Getting server list...")
+    modem.transmit(1, 1, { type = "list_servers" })
+    local _, _, _, _, msg = os.pullEvent("modem_message")
+    if msg.type == "server_list" then
+        local list = msg.list
+        if #list == 0 then print("No servers found.") waitKey() return end
+        print("Available servers:")
+        for i, s in ipairs(list) do
+            print(i .. ". " .. s.id .. " (" .. s.connections .. " clients)")
+        end
+        write("Choose server number: ")
+        local num = tonumber(read())
+        if num and list[num] then
+            server_id = list[num].id
+            print("Server selected: " .. server_id)
+        else
+            print("Invalid choice")
+        end
         sleep(1)
-        chatLoop()
-    else
-        print("Chat creation failed: "..(response and response.reason or "No server"))
-        sleep(2)
     end
 end
 
-function chatLoop()
-    term.clear()
-    print("Your nickname: "..nick)
-    print("Chat code: "..currentChat)
-    print("-----------------------------")
+local function createServer()
+    clear()
+    write("Enter new server ID: ")
+    local id = read()
+    write("Enter encryption key (number): ")
+    local key = tonumber(read())
+    local port = math.random(1000, 9999)
+    modem.transmit(1, 1, { type = "register_server", server_id = id, port = port, key = key })
+    print("Server created: " .. id)
+    sleep(1)
+end
+
+local function createChat()
+    clear()
+    write("Enter new chat ID: ")
+    chat_id = read()
+    print("Chat created:", chat_id)
+    sleep(1)
+end
+
+local function chatMenu()
+    if not server_id then print("Select server first!") sleep(1) return end
+    clear()
+    write("Enter chat ID: ")
+    chat_id = read()
+    modem.transmit(1, 1, { type = "get_chat", server_id = server_id, chat_id = chat_id })
     while true do
-        parallel.waitForAny(
-            function()
-                local id, msg = rednet.receive()
-                if msg.type=="new_message" and msg.chat==currentChat then
-                    print(msg.text)
-                elseif msg.type=="history" and msg.chat==currentChat then
-                    print("Chat history:")
-                    for _,m in ipairs(msg.messages) do
-                        print(m)
-                    end
-                end
-            end,
-            function()
-                write("> ")
-                local text = read()
-                if text=="/exit" then return end
-                if text=="/history" then
-                    rednet.broadcast({type="history", chat=currentChat})
-                else
-                    rednet.broadcast({type="send_message", chat=currentChat, nick=nick, text=text})
-                end
+        local _, _, _, _, msg = os.pullEvent("modem_message")
+        if msg.type == "chat_update" and msg.chat_id == chat_id then
+            messages = msg.messages
+            clear()
+            print("Nick: " .. nickname)
+            print("Server: " .. server_id)
+            print("Chat: " .. chat_id)
+            print("-------------------")
+            for i = math.max(1, #messages - 10), #messages do
+                local m = messages[i]
+                print("["..textutils.formatTime(m.time, true).."] " .. m.user .. ": " .. m.text)
             end
-        )
+            print("-------------------")
+            write("Message (or 'exit'): ")
+            local text = read()
+            if text == "exit" then break end
+            modem.transmit(1, 1, { type = "send_chat", server_id = server_id, chat_id = chat_id, user = nickname, text = text })
+        end
     end
 end
 
 while true do
-    mainMenu()
-    local choice = read()
-    if choice=="1" then
-        register()
-    elseif choice=="2" then
-        login()
-    elseif choice=="3" then
-        joinChat()
-    elseif choice=="4" then
-        createChat()
-    elseif choice=="5" then
-        break
+    showMainMenu()
+    write("Select option: ")
+    local opt = read()
+    if opt == "1" then registerLogin()
+    elseif opt == "2" then chooseServer()
+    elseif opt == "3" then chatMenu()
+    elseif opt == "5" then createChat()
+    elseif opt == "6" then createServer()
+    elseif opt == "8" then clear() print("Goodbye!") break
+    else print("Invalid option.") sleep(1)
     end
 end
+
