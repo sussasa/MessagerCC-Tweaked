@@ -62,7 +62,7 @@ local function try_open_rednet()
   for _,s in ipairs(sides) do
     local ok, typ = pcall(peripheral.getType, s)
     if ok and typ and tostring(typ):lower():find("modem") then
-      local o, e = pcall(rednet.open, s)
+      local o = pcall(rednet.open, s)
       if o then return s end
     end
   end
@@ -102,6 +102,9 @@ end
 
 local users = loadFile(usersFile)
 log("Server "..serverCode.." started on side "..tostring(rednetSide).." (enc key set)")
+
+local chats = {} -- in-memory cache (file-backed)
+local dms = {}
 
 local function save_room_msg(room, user, text)
   local path = base.."rooms/"..room..".db"
@@ -150,7 +153,7 @@ local function get_dm_history(from,to)
 end
 
 while true do
-  local sender, raw, proto = rednet.receive()
+  local sender, raw = rednet.receive()
   local ok, data = pcall(textutils.unserialize, raw)
   if not ok or type(data) ~= "table" then
     rednet.send(sender, textutils.serialize({type="error", reason="bad_message"}))
@@ -166,6 +169,7 @@ while true do
         rednet.send(sender, textutils.serialize({type="register", ok=true}))
         log("User registered: "..u)
       end
+
     elseif a == "login" then
       local u = data.user or ""; local p = data.pass or ""
       if users[u] and users[u] == p then
@@ -174,6 +178,7 @@ while true do
       else
         rednet.send(sender, textutils.serialize({type="login", ok=false}))
       end
+
     elseif a == "create_room" then
       local room = data.room or ""
       local path = base.."rooms/"..room..".db"
@@ -184,31 +189,38 @@ while true do
         rednet.send(sender, textutils.serialize({type="create_room", ok=true}))
         log("Room created: "..room)
       end
+
     elseif a == "history" then
       local room = data.room or ""
       local hist = get_room_history_decrypted(room)
       rednet.send(sender, textutils.serialize({type="history", room=room, messages=hist}))
       log("History requested: "..room)
+
     elseif a == "send_room" then
       local room = data.room or ""; local user = data.user or ""; local text = data.text or ""
       save_room_msg(room,user,text)
       log("Message stored in room "..room.." by "..user)
       rednet.broadcast(textutils.serialize({type="new_room_msg", room=room, user=user, time=textutils.formatTime(os.time(), true)}))
+
     elseif a == "dm_history" then
       local from = data.user or ""; local to = data.to or ""
       local hist = get_dm_history(from,to)
       rednet.send(sender, textutils.serialize({type="dm_history", a=from, b=to, messages=hist}))
       log("DM history requested "..from.." <-> "..to)
+
     elseif a == "send_dm" then
       local from = data.user or ""; local to = data.to or ""; local text = data.text or ""
       save_dm(from,to,text)
       log("DM stored "..from.." -> "..to)
       rednet.broadcast(textutils.serialize({type="new_dm", from=from, to=to, time=textutils.formatTime(os.time(), true)}))
+
     elseif a == "ping" then
       rednet.send(sender, textutils.serialize({type="pong", server=serverCode}))
+
     elseif a == "connect" then
       log("Client connected (id "..tostring(sender)..")")
       rednet.send(sender, textutils.serialize({type="ok"}))
     end
   end
 end
+
