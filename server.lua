@@ -1,45 +1,73 @@
-local users = {}
+local modem = peripheral.find("modem")
+if not modem then print("No modem found!") return end
+modem.open(1)
+
+local servers = {}
 local chats = {}
-local side = "back"
 
-rednet.open(side)
+local function encrypt(text, key)
+    local out = {}
+    for i = 1, #text do
+        local c = string.byte(text, i)
+        table.insert(out, string.char(bit.bxor(c, key)))
+    end
+    return table.concat(out)
+end
 
-print("TESTCHAT SERVER started")
+local function decrypt(text, key)
+    return encrypt(text, key)
+end
+
+local function broadcastServerList()
+    local list = {}
+    for id, data in pairs(servers) do
+        table.insert(list, { id = id, connections = #data.clients })
+    end
+    for id, data in pairs(servers) do
+        modem.transmit(data.port, 1, { type = "server_list", list = list })
+    end
+end
 
 while true do
-    local id, msg = rednet.receive()
+    local _, _, channel, replyChannel, msg = os.pullEvent("modem_message")
     if type(msg) == "table" then
-        if msg.type == "register" then
-            if users[msg.nick] then
-                rednet.send(id, {type="register", success=false, reason="Nickname already exists"})
+        if msg.type == "register_server" then
+            servers[msg.server_id] = { port = msg.port, clients = {}, key = tonumber(msg.key) or 0 }
+            print("New server:", msg.server_id, "Key:", msg.key)
+            broadcastServerList()
+        elseif msg.type == "connect_server" then
+            local srv = servers[msg.server_id]
+            if srv then
+                table.insert(srv.clients, replyChannel)
+                modem.transmit(replyChannel, 1, { type = "connect_ok" })
+                broadcastServerList()
             else
-                users[msg.nick] = {password=msg.password}
-                rednet.send(id, {type="register", success=true})
+                modem.transmit(replyChannel, 1, { type = "connect_fail" })
             end
-        elseif msg.type == "login" then
-            if users[msg.nick] and users[msg.nick].password == msg.password then
-                rednet.send(id, {type="login", success=true})
-            else
-                rednet.send(id, {type="login", success=false, reason="Wrong nick or password"})
+        elseif msg.type == "send_chat" then
+            local chatKey = msg.server_id .. ":" .. msg.chat_id
+            chats[chatKey] = chats[chatKey] or {}
+            local srv = servers[msg.server_id]
+            local encText = encrypt(msg.text, srv.key)
+            table.insert(chats[chatKey], { user = msg.user, text = encText, time = os.time() })
+            for _, client in ipairs(srv.clients) do
+                local decMsgs = {}
+                for _, m in ipairs(chats[chatKey]) do
+                    table.insert(decMsgs, { user = m.user, text = decrypt(m.text, srv.key), time = m.time })
+                end
+                modem.transmit(client, 1, { type = "chat_update", chat_id = msg.chat_id, messages = decMsgs })
             end
-        elseif msg.type == "create_chat" then
-            if chats[msg.chat] then
-                rednet.send(id, {type="create_chat", success=false, reason="Chat code already exists"})
-            else
-                chats[msg.chat] = {}
-                rednet.send(id, {type="create_chat", success=true})
+            print("Msg in", chatKey)
+        elseif msg.type == "get_chat" then
+            local chatKey = msg.server_id .. ":" .. msg.chat_id
+            local srv = servers[msg.server_id]
+            local decMsgs = {}
+            for _, m in ipairs(chats[chatKey] or {}) do
+                table.insert(decMsgs, { user = m.user, text = decrypt(m.text, srv.key), time = m.time })
             end
-        elseif msg.type == "send_message" then
-            if chats[msg.chat] then
-                table.insert(chats[msg.chat], msg.nick..": "..msg.text)
-                rednet.broadcast({type="new_message", chat=msg.chat, text=msg.nick..": "..msg.text})
-            end
-        elseif msg.type == "history" then
-            if chats[msg.chat] then
-                rednet.send(id, {type="history", chat=msg.chat, messages=chats[msg.chat]})
-            else
-                rednet.send(id, {type="history", chat=msg.chat, messages={}})
-            end
+            modem.transmit(replyChannel, 1, { type = "chat_update", chat_id = msg.chat_id, messages = decMsgs })
+        elseif msg.type == "list_servers" then
+            broadcastServerList()
         end
     end
 end
