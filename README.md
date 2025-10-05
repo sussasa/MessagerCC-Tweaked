@@ -1,2 +1,2 @@
-# MessagerCC-Tweaked_Russian
-мессенджер который имеет приватные чаты,коды для чатов,пароли и чаты,регистрацию
+# MessagerCC-Tweaked
+current version - 2.5 
