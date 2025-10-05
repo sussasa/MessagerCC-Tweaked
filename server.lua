@@ -4,7 +4,7 @@ print("TESTCHAT server setup")
 write("Enter server ID (press Enter for DEFAULT): ")
 local serverCode = read()
 if serverCode == "" then serverCode = "DEFAULT" end
-write("Enter encryption key (number, press Enter for 0): ")
+write("Encryption key (number, press Enter for 0): ")
 local key_input = read()
 local ENC_KEY = tonumber(key_input) or 0
 
